@@ -1,16 +1,10 @@
-{
-  sources ? import ./nix/sources.nix,
-  pkgs ? import sources.nixpkgs {},
-  naersk ? pkgs.callPackage sources.naersk {},
-  nur ? pkgs.callPackage sources.NUR {},
-}:
-
-let
-  rust = nur.repos.mozilla.latest.rustChannels.stable.rust;
-in naersk.buildPackage {
-  name = "rnix-lsp";
-  root = nur.repos.jd91mzm2.lib.cleanSourceRust ./.;
-
-  cargo = rust.cargo;
-  rustc = rust.rustc;
+{ pkgs ? import <nixpkgs> {}
+}: {
+  rnix-lsp = pkgs.rustPlatform.buildRustPackage rec {
+    pname = "rnix-lsp";
+    version = "0.1.0";
+    src = ./.;
+    cargoSha256 = "021zcdz3dynrm78hips0jyf0xfkrxa0f28swalgx7vqz6jj8yi8a";
+  };
 }
+
