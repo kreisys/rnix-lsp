@@ -25,6 +25,7 @@ mod lookup;
 mod utils;
 
 use dirs::home_dir;
+use itertools::Itertools;
 use log::{error, trace, warn};
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
@@ -307,20 +308,35 @@ impl App {
         // Re-open, because scope_for_ident may mutably borrow
         let (_, content) = self.files.get(&params.text_document.uri)?;
 
-        let mut completions = Vec::new();
-        for var in scope.keys() {
-            if var.starts_with(&name.as_str()) {
-                completions.push(CompletionItem {
-                    label: var.clone(),
-                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                        range: utils::range(content, name.node().text_range()),
-                        new_text: var.clone(),
-                    })),
-                    ..CompletionItem::default()
-                });
-            }
-        }
-        Some(completions)
+        let scope_completions = scope
+            .keys()
+            .filter(|var| var.starts_with(&name.as_str()))
+            .map(|var| CompletionItem {
+                label: var.clone(),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                    range: utils::range(content, name.node().text_range()),
+                    new_text: var.clone(),
+                })),
+                ..CompletionItem::default()
+            });
+
+        let manix_completions = self
+            .manix_db
+            .hash_to_defs
+            .values()
+            .flatten()
+            .filter(|def| def.key.starts_with(&name.as_str()))
+            .unique_by(|def| &def.key)
+            .map(|def| CompletionItem {
+                label: def.key.clone(),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                    range: utils::range(content, name.node().text_range()),
+                    new_text: def.key.clone(),
+                })),
+                ..CompletionItem::default()
+            });
+
+        Some(scope_completions.chain(manix_completions).collect_vec())
     }
     fn rename(&mut self, params: RenameParams) -> Option<HashMap<Url, Vec<TextEdit>>> {
         struct Rename<'a> {
