@@ -67,7 +67,7 @@ pub fn ident_at(root: &SyntaxNode, offset: usize) -> Option<CursorInfo> {
 
             path.push(Ident::cast(item)?.as_str().into());
         }
-        panic!("identifier at cursor is somehow not a child of its parent");
+        panic!("identifier at cursor is somehow not a child of its parent",);
     } else if let Some(mut index) = parent.and_then(Select::cast) {
         let mut path = Vec::new();
         while let Some(new) = Select::cast(index.set()?) {

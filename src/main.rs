@@ -83,14 +83,20 @@ fn real_main() -> Result<(), Error> {
         }),
         rename_provider: Some(RenameProviderCapability::Simple(true)),
         selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
         ..ServerCapabilities::default()
     })
     .unwrap();
 
     connection.initialize(capabilities)?;
 
+    let manix_db = manix::Database::load(
+        &xdg::BaseDirectories::with_prefix("manix")?.place_cache_file("database.bin")?,
+    )?;
+
     App {
         files: HashMap::new(),
+        manix_db,
         conn: connection,
     }
     .main();
@@ -102,6 +108,7 @@ fn real_main() -> Result<(), Error> {
 
 struct App {
     files: HashMap<Url, (AST, String)>,
+    manix_db: manix::Database,
     conn: Connection,
 }
 impl App {
@@ -173,11 +180,25 @@ impl App {
         }
         let mut req = Some(req);
         if let Some((id, params)) = cast::<GotoDefinition>(&mut req) {
-            if let Some(pos) = self.lookup_definition(params) {
+            if let Some(pos) = self.lookup_definition(params.text_document_position_params) {
                 self.reply(Response::new_ok(id, pos));
             } else {
                 self.reply(Response::new_ok(id, ()));
             }
+        } else if let Some((id, params)) = cast::<HoverRequest>(&mut req) {
+            let documentation = self
+                .documentation(&params.text_document_position_params)
+                .unwrap_or_default();
+            self.reply(Response::new_ok(
+                id,
+                Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: documentation,
+                    }),
+                    range: None,
+                },
+            ));
         } else if let Some((id, params)) = cast::<Completion>(&mut req) {
             let completions = self
                 .completions(&params.text_document_position)
@@ -256,6 +277,24 @@ impl App {
             range: utils::range(definition_content, var.key.text_range()),
         })
     }
+
+    fn documentation(&mut self, params: &TextDocumentPositionParams) -> Option<String> {
+        let (ast, content) = self.files.get(&params.text_document.uri)?;
+        let offset = utils::lookup_pos(content, params.position)?;
+        let cursor = utils::ident_at(&ast.node(), offset)?;
+        let ident = cursor.ident.as_str();
+
+        let definitions = self.manix_db.search(&ident.to_lowercase());
+
+        Some(
+            definitions
+                .iter()
+                .map(|def| def.pretty_printed())
+                .collect::<Vec<String>>()
+                .join("\n"),
+        )
+    }
+
     #[allow(clippy::shadow_unrelated)] // false positive
     fn completions(&mut self, params: &TextDocumentPositionParams) -> Option<Vec<CompletionItem>> {
         let (ast, content) = self.files.get(&params.text_document.uri)?;
@@ -273,10 +312,10 @@ impl App {
             if var.starts_with(&name.as_str()) {
                 completions.push(CompletionItem {
                     label: var.clone(),
-                    text_edit: Some(TextEdit {
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                         range: utils::range(content, name.node().text_range()),
                         new_text: var.clone(),
-                    }),
+                    })),
                     ..CompletionItem::default()
                 });
             }
@@ -357,9 +396,10 @@ impl App {
                 .and_then(|s| Url::parse(&format!("file://{}", s.to_string_lossy())).ok());
                 if let Some(file_url) = file_url {
                     document_links.push(DocumentLink {
-                        target: file_url,
+                        target: Some(file_url),
                         range: utils::range(current_content, node.text_range()),
                         tooltip: None,
+                        data: None,
                     })
                 }
             }
