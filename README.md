@@ -25,7 +25,7 @@ bash -c "env RUST_LOG=trace rnix-lsp 2> /tmp/rnix-lsp.log"
 ## Install
 
 ```
-$ nix-env -i -f https://github.com/nix-community/rnix-lsp/archive/master.tar.gz
+$ nix-env -i -f https://github.com/elkowar/rnix-lsp/archive/master.tar.gz
 ```
 
 ## Integrate with your editor
