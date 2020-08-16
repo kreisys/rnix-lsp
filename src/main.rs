@@ -339,24 +339,14 @@ impl App {
 
         let mut namespace = self.namespace_for_node(name.node());
         let results = {
-            let mut results = self
-                .manix_source
-                .search(&namespace.join("."))
-                .into_iter()
-                .filter(|x| x.name().starts_with(&namespace.join(".")))
-                .collect_vec();
+            let mut results = self.manix_source.search(&namespace.join("."));
 
             while let Some((_, tail)) = namespace.split_first() {
                 if !results.is_empty() {
                     break;
                 }
                 namespace = tail.to_vec();
-                results = self
-                    .manix_source
-                    .search(&namespace.join("."))
-                    .into_iter()
-                    .filter(|x| x.name().starts_with(&namespace.join(".")))
-                    .collect_vec();
+                results = self.manix_source.search(&namespace.join("."));
                 dbg!(&namespace);
             }
             results
