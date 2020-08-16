@@ -33,6 +33,7 @@ use lsp_types::{
     request::{Request as RequestTrait, *},
     *,
 };
+use manix::DocSource;
 use rnix::{
     parser::*,
     types::*,
@@ -91,13 +92,28 @@ fn real_main() -> Result<(), Error> {
 
     connection.initialize(capabilities)?;
 
-    let manix_db = manix::Database::load(
-        &xdg::BaseDirectories::with_prefix("manix")?.place_cache_file("database.bin")?,
-    )?;
+    let mut manix_source = manix::AggregateDocSource::default();
+    let comments_cache_path =
+        &xdg::BaseDirectories::with_prefix("manix")?.place_cache_file("database.bin")?;
+    let comments_source = manix::comments_docsource::CommentsDatabase::load(&comments_cache_path)?;
+    manix_source.add_source(Box::new(comments_source));
+
+    if let Some(options_db) = manix::options_docsource::get_hm_json_doc_path()
+        .ok()
+        .and_then(|path| manix::options_docsource::OptionsDatabase::try_from_file(path))
+    {
+        manix_source.add_source(Box::new(options_db));
+    }
+    if let Some(options_db) = manix::options_docsource::get_nixos_json_doc_path()
+        .ok()
+        .and_then(|path| manix::options_docsource::OptionsDatabase::try_from_file(path))
+    {
+        manix_source.add_source(Box::new(options_db));
+    }
 
     App {
         files: HashMap::new(),
-        manix_db,
+        manix_source,
         conn: connection,
     }
     .main();
@@ -109,7 +125,7 @@ fn real_main() -> Result<(), Error> {
 
 struct App {
     files: HashMap<Url, (AST, String)>,
-    manix_db: manix::Database,
+    manix_source: manix::AggregateDocSource,
     conn: Connection,
 }
 impl App {
@@ -285,7 +301,7 @@ impl App {
         let cursor = utils::ident_at(&ast.node(), offset)?;
         let ident = cursor.ident.as_str();
 
-        let definitions = self.manix_db.search(&ident.to_lowercase());
+        let definitions = self.manix_source.search(&ident.to_lowercase());
 
         Some(
             definitions
@@ -304,6 +320,7 @@ impl App {
         let node = ast.node();
         let (name, scope) =
             self.scope_for_ident(params.text_document.uri.clone(), &node, offset)?;
+        dbg!(&name.as_str());
 
         // Re-open, because scope_for_ident may mutably borrow
         let (_, content) = self.files.get(&params.text_document.uri)?;
@@ -320,21 +337,47 @@ impl App {
                 ..CompletionItem::default()
             });
 
-        let manix_completions = self
-            .manix_db
-            .hash_to_defs
-            .values()
-            .flatten()
-            .filter(|def| def.key.starts_with(&name.as_str()))
-            .unique_by(|def| &def.key)
-            .map(|def| CompletionItem {
-                label: def.key.clone(),
+        let mut namespace = self.namespace_for_node(name.node());
+        let results = {
+            let mut results = self
+                .manix_source
+                .search(&namespace.join("."))
+                .into_iter()
+                .filter(|x| x.name().starts_with(&namespace.join(".")))
+                .collect_vec();
+
+            while let Some((_, tail)) = namespace.split_first() {
+                if !results.is_empty() {
+                    break;
+                }
+                namespace = tail.to_vec();
+                results = self
+                    .manix_source
+                    .search(&namespace.join("."))
+                    .into_iter()
+                    .filter(|x| x.name().starts_with(&namespace.join(".")))
+                    .collect_vec();
+                dbg!(&namespace);
+            }
+            results
+        };
+
+        let manix_completions = results.iter().unique_by(|x| x.name()).map(|def| {
+            let text_to_complete = def
+                .name()
+                .trim_start_matches(&(namespace.join(".") + "."))
+                .to_owned();
+
+            CompletionItem {
+                label: text_to_complete.clone(),
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                     range: utils::range(content, name.node().text_range()),
-                    new_text: def.key.clone(),
+                    new_text: text_to_complete,
                 })),
+                documentation: Some(Documentation::String(def.pretty_printed())),
                 ..CompletionItem::default()
-            });
+            }
+        });
 
         Some(scope_completions.chain(manix_completions).collect_vec())
     }

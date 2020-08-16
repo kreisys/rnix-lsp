@@ -6,6 +6,7 @@ use lsp_types::Url;
 use rnix::{types::*, value::Value as ParsedValue, SyntaxNode};
 use std::{
     collections::{hash_map::Entry, HashMap},
+    convert::TryFrom,
     fs,
     rc::Rc,
 };
@@ -77,5 +78,23 @@ impl App {
             utils::populate(&file, &mut scope, &set);
         }
         Some(scope)
+    }
+
+    pub fn namespace_for_node(&self, node: &SyntaxNode) -> Vec<String> {
+        let mut path = node
+            .parent()
+            .map(|p| self.namespace_for_node(&p))
+            .unwrap_or_default();
+
+        if let Ok(ParsedType::KeyValue(key_value)) = ParsedType::try_from(node.clone()) {
+            let mut my_path = key_value
+                .key()
+                .unwrap()
+                .path()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>();
+            path.append(&mut my_path);
+        }
+        path
     }
 }

@@ -49,6 +49,15 @@ pub struct CursorInfo {
     pub path: Vec<String>,
     pub ident: Ident,
 }
+
+pub fn closest_node_to(root: &SyntaxNode, offset: usize) -> Option<SyntaxNode> {
+    match root.token_at_offset(TextUnit::from_usize(offset)) {
+        TokenAtOffset::None => None,
+        TokenAtOffset::Single(node) => Some(node.parent()),
+        TokenAtOffset::Between(left, _) => Some(left.parent()),
+    }
+}
+
 pub fn ident_at(root: &SyntaxNode, offset: usize) -> Option<CursorInfo> {
     let ident = match root.token_at_offset(TextUnit::from_usize(offset)) {
         TokenAtOffset::None => None,
