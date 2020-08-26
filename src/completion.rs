@@ -39,7 +39,14 @@ impl App {
         Some(scope_completions)
     }
 
-    fn manix_completions(
+    fn manix_options_completion(
+        &self,
+        params: &TextDocumentPositionParams,
+    ) -> Option<Vec<CompletionItem>> {
+        None
+    }
+
+    fn manix_value_completions(
         &self,
         params: &TextDocumentPositionParams,
     ) -> Option<Vec<CompletionItem>> {
@@ -63,10 +70,12 @@ impl App {
             end: utils::offset_to_pos(
                 content,
                 full_ident_node
-                    .children_with_tokens()
+                    .descendants_with_tokens()
                     .take_while(|n| match n {
-                        rnix::NodeOrToken::Node(n) => n.kind() == SyntaxKind::NODE_IDENT,
-                        rnix::NodeOrToken::Token(t) => t.kind() == SyntaxKind::TOKEN_DOT,
+                        rnix::NodeOrToken::Node(_) => true,
+                        rnix::NodeOrToken::Token(t) => {
+                            t.kind() == SyntaxKind::TOKEN_DOT || t.kind() == SyntaxKind::TOKEN_IDENT
+                        }
                     })
                     .last()?
                     .text_range()
@@ -74,7 +83,6 @@ impl App {
                     .to_usize(),
             ),
         };
-        dbg!(node_range);
 
         let search_results = self.manix_values.search(&full_ident_name.clone().join("."));
 
@@ -109,7 +117,7 @@ impl App {
         params: &TextDocumentPositionParams,
     ) -> Option<Vec<CompletionItem>> {
         // let scope_completions = self.scope_completions(params)?;
-        let manix_completions = self.manix_completions(params)?;
+        let manix_completions = self.manix_value_completions(params)?;
         Some(manix_completions)
     }
 

@@ -86,26 +86,9 @@ impl App {
             _ => None,
         };
 
-
-        
         let node_path_pair: Option<(SyntaxNode, Vec<String>)> = node.ancestors().find_map(|node| {
             let path = match ParsedType::try_from(node.clone()) {
                 Ok(ParsedType::Key(key)) => {
-                    let path = key
-                        .node()
-                        .children_with_tokens()
-                        .take_while(|n| match n {
-                            NodeOrToken::Node(n) => n.kind() == SyntaxKind::NODE_IDENT,
-                            NodeOrToken::Token(t) => t.kind() == SyntaxKind::TOKEN_DOT,
-                        })
-                        .filter_map(|n| n.as_node().cloned())
-                        .filter_map(try_get_ident_name)
-                        .filter(|name| !name.trim().trim_end_matches("\n").is_empty())
-                        .map(|x| x.replace("\n", ""))
-                        .collect::<Vec<_>>();
-                    Some(path)
-                }
-                Ok(ParsedType::Select(key)) => {
                     let path = key
                         .node()
                         .children_with_tokens()
@@ -125,6 +108,51 @@ impl App {
             path.map(|x| (node, x))
         });
 
+        let node_path_pair = node_path_pair.or_else(|| {
+            let mut outermost_select = None;
+            for ancestor in node.ancestors() {
+                match ParsedType::try_from(ancestor.clone()) {
+                    Ok(ParsedType::Select(select)) => {
+                        outermost_select = Some(select);
+                    }
+                    _ if outermost_select.is_some() => {
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            let mut path = Vec::new();
+            for child in outermost_select.clone()?.node().descendants_with_tokens() {
+                match child {
+                    NodeOrToken::Node(_) => {}
+                    NodeOrToken::Token(t) if t.kind() == SyntaxKind::TOKEN_DOT => {}
+                    NodeOrToken::Token(t) if t.kind() == SyntaxKind::TOKEN_IDENT => {
+                        path.push(t.text().to_string());
+                    }
+                    NodeOrToken::Token(_) => {
+                        break;
+                    }
+                }
+            }
+            Some((outermost_select?.node().clone(), path))
+        });
+
+        // Ok(ParsedType::Select(key)) => {
+        //     let path = key
+        //         .node()
+        //         .children_with_tokens()
+        //         .take_while(|n| match n {
+        //             NodeOrToken::Node(n) => n.kind() == SyntaxKind::NODE_IDENT,
+        //             NodeOrToken::Token(t) => t.kind() == SyntaxKind::TOKEN_DOT,
+        //         })
+        //         .filter_map(|n| n.as_node().cloned())
+        //         .filter_map(try_get_ident_name)
+        //         .filter(|name| !name.trim().trim_end_matches("\n").is_empty())
+        //         .map(|x| x.replace("\n", ""))
+        //         .collect::<Vec<_>>();
+        //     Some(path)
+        // }
         dbg!(&node_path_pair);
 
         Some(node_path_pair?)

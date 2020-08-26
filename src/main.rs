@@ -35,10 +35,8 @@ use lsp_types::{
     *,
 };
 use manix::{
-    comments_docsource::CommentsDatabase,
-    nixpkgs_tree_docsource,
-    options_docsource::{OptionsDatabase, OptionsDatabaseType},
-    xml_docsource, AggregateDocSource, Cache, DocSource,
+    comments_docsource::CommentsDatabase, nixpkgs_tree_docsource,
+    options_docsource::{self, OptionsDatabase}, xml_docsource, AggregateDocSource, Cache, DocSource,
 };
 use nixpkgs_tree_docsource::NixpkgsTreeDatabase;
 use rnix::{
@@ -121,7 +119,7 @@ fn build_source_and_add<T>(
     path: &PathBuf,
     aggregate: &mut AggregateDocSource,
 ) where
-    T: 'static + DocSource + Cache + Sync,
+    T: 'static + DocSource + manix::Cache + Sync,
 {
     eprintln!("Building {} cache...", name);
     if let Err(e) = source.update() {
@@ -195,14 +193,14 @@ fn load_manix_options(reload_cache: bool) -> Option<AggregateDocSource> {
 
     if reload_cache {
         build_source_and_add(
-            OptionsDatabase::new(OptionsDatabaseType::HomeManager),
+            OptionsDatabase::new(options_docsource::OptionsDatabaseType::HomeManager),
             "Home Manager Options",
             &options_hm_cache_path,
             &mut aggregate_source,
         );
 
         build_source_and_add(
-            OptionsDatabase::new(OptionsDatabaseType::NixOS),
+            OptionsDatabase::new(options_docsource::OptionsDatabaseType::NixOS),
             "NixOS Options",
             &options_nixos_cache_path,
             &mut aggregate_source,
