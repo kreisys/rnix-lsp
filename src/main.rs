@@ -21,6 +21,7 @@
     clippy::integer_arithmetic,
 )]
 
+mod completion;
 mod lookup;
 mod utils;
 
@@ -33,7 +34,13 @@ use lsp_types::{
     request::{Request as RequestTrait, *},
     *,
 };
-use manix::DocSource;
+use manix::{
+    comments_docsource::CommentsDatabase,
+    nixpkgs_tree_docsource,
+    options_docsource::{OptionsDatabase, OptionsDatabaseType},
+    xml_docsource, AggregateDocSource, Cache, DocSource,
+};
+use nixpkgs_tree_docsource::NixpkgsTreeDatabase;
 use rnix::{
     parser::*,
     types::*,
@@ -42,11 +49,12 @@ use rnix::{
 };
 use std::{
     collections::HashMap,
-    panic,
+    fs, panic,
     path::{Path, PathBuf},
     process,
     rc::Rc,
 };
+use xml_docsource::XmlFuncDocDatabase;
 
 type Error = Box<dyn std::error::Error>;
 
@@ -92,24 +100,7 @@ fn real_main() -> Result<(), Error> {
 
     connection.initialize(capabilities)?;
 
-    let mut manix_source = manix::AggregateDocSource::default();
-    let comments_cache_path =
-        &xdg::BaseDirectories::with_prefix("manix")?.place_cache_file("database.bin")?;
-    let comments_source = manix::comments_docsource::CommentsDatabase::load(&comments_cache_path)?;
-    manix_source.add_source(Box::new(comments_source));
-
-    if let Some(options_db) = manix::options_docsource::get_hm_json_doc_path()
-        .ok()
-        .and_then(|path| manix::options_docsource::OptionsDatabase::try_from_file(path))
-    {
-        manix_source.add_source(Box::new(options_db));
-    }
-    if let Some(options_db) = manix::options_docsource::get_nixos_json_doc_path()
-        .ok()
-        .and_then(|path| manix::options_docsource::OptionsDatabase::try_from_file(path))
-    {
-        manix_source.add_source(Box::new(options_db));
-    }
+    let manix_source = load_manix_source().unwrap();
 
     App {
         files: HashMap::new(),
@@ -121,6 +112,103 @@ fn real_main() -> Result<(), Error> {
     io_threads.join()?;
 
     Ok(())
+}
+
+fn build_source_and_add<T>(
+    mut source: T,
+    name: &str,
+    path: &PathBuf,
+    aggregate: &mut AggregateDocSource,
+) where
+    T: 'static + DocSource + Cache + Sync,
+{
+    eprintln!("Building {} cache...", name);
+    if let Err(e) = source.update() {
+        eprintln!("{:?}", e);
+        return;
+    }
+
+    if let Err(e) = source.save(&path) {
+        eprintln!("{:?}", e);
+        return;
+    }
+
+    aggregate.add_source(Box::new(source));
+}
+
+fn load_manix_source() -> Option<AggregateDocSource> {
+    let cache_dir = xdg::BaseDirectories::with_prefix("manix").ok()?;
+
+    let comment_cache_path = cache_dir.place_cache_file("database.bin").ok()?;
+    let nixpkgs_tree_cache_path = cache_dir.place_cache_file("nixpkgs_tree.bin").ok()?;
+    let options_hm_cache_path = cache_dir.place_cache_file("options_hm_database.bin").ok()?;
+    let options_nixos_cache_path = cache_dir
+        .place_cache_file("options_nixos_database.bin")
+        .ok()?;
+    let nixpkgs_doc_cache_path = cache_dir
+        .place_cache_file("nixpkgs_doc_database.bin")
+        .ok()?;
+
+    let mut aggregate_source = AggregateDocSource::default();
+
+    let mut comment_db = if comment_cache_path.exists() {
+        CommentsDatabase::load(&std::fs::read(&comment_cache_path).ok()?).ok()?
+    } else {
+        CommentsDatabase::new()
+    };
+    if comment_db.hash_to_defs.len() == 0 {
+        eprintln!("Building NixOS comments cache...");
+    }
+    let cache_invalid = comment_db.update().ok()?;
+    comment_db.save(&comment_cache_path).ok()?;
+    aggregate_source.add_source(Box::new(comment_db));
+
+    if cache_invalid {
+        build_source_and_add(
+            OptionsDatabase::new(OptionsDatabaseType::HomeManager),
+            "Home Manager Options",
+            &options_hm_cache_path,
+            &mut aggregate_source,
+        );
+
+        build_source_and_add(
+            OptionsDatabase::new(OptionsDatabaseType::NixOS),
+            "NixOS Options",
+            &options_nixos_cache_path,
+            &mut aggregate_source,
+        );
+
+        build_source_and_add(
+            nixpkgs_tree_docsource::NixpkgsTreeDatabase::new(),
+            "Nixpkgs Tree",
+            &nixpkgs_tree_cache_path,
+            &mut aggregate_source,
+        );
+
+        build_source_and_add(
+            xml_docsource::XmlFuncDocDatabase::new(),
+            "Nixpkgs Documentation",
+            &nixpkgs_doc_cache_path,
+            &mut aggregate_source,
+        );
+    } else {
+        aggregate_source.add_source(Box::new(
+            OptionsDatabase::load(&fs::read(&options_hm_cache_path).ok()?).ok()?,
+        ));
+
+        aggregate_source.add_source(Box::new(
+            OptionsDatabase::load(&fs::read(&options_nixos_cache_path).ok()?).ok()?,
+        ));
+
+        aggregate_source.add_source(Box::new(
+            NixpkgsTreeDatabase::load(&fs::read(&nixpkgs_tree_cache_path).ok()?).ok()?,
+        ));
+
+        aggregate_source.add_source(Box::new(
+            XmlFuncDocDatabase::load(&fs::read(&nixpkgs_doc_cache_path).ok()?).ok()?,
+        ));
+    }
+    Some(aggregate_source)
 }
 
 struct App {
@@ -312,65 +400,6 @@ impl App {
         )
     }
 
-    #[allow(clippy::shadow_unrelated)] // false positive
-    fn completions(&mut self, params: &TextDocumentPositionParams) -> Option<Vec<CompletionItem>> {
-        let (ast, content) = self.files.get(&params.text_document.uri)?;
-        let offset = utils::lookup_pos(content, params.position)?;
-
-        let node = ast.node();
-        let (name, scope) =
-            self.scope_for_ident(params.text_document.uri.clone(), &node, offset)?;
-        dbg!(&name.as_str());
-
-        // Re-open, because scope_for_ident may mutably borrow
-        let (_, content) = self.files.get(&params.text_document.uri)?;
-
-        let scope_completions = scope
-            .keys()
-            .filter(|var| var.starts_with(&name.as_str()))
-            .map(|var| CompletionItem {
-                label: var.clone(),
-                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                    range: utils::range(content, name.node().text_range()),
-                    new_text: var.clone(),
-                })),
-                ..CompletionItem::default()
-            });
-
-        let mut namespace = self.namespace_for_node(name.node());
-        let results = {
-            let mut results = self.manix_source.search(&namespace.join("."));
-
-            while let Some((_, tail)) = namespace.split_first() {
-                if !results.is_empty() {
-                    break;
-                }
-                namespace = tail.to_vec();
-                results = self.manix_source.search(&namespace.join("."));
-                dbg!(&namespace);
-            }
-            results
-        };
-
-        let manix_completions = results.iter().unique_by(|x| x.name()).map(|def| {
-            let text_to_complete = def
-                .name()
-                .trim_start_matches(&(namespace.join(".") + "."))
-                .to_owned();
-
-            CompletionItem {
-                label: text_to_complete.clone(),
-                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                    range: utils::range(content, name.node().text_range()),
-                    new_text: text_to_complete,
-                })),
-                documentation: Some(Documentation::String(def.pretty_printed())),
-                ..CompletionItem::default()
-            }
-        });
-
-        Some(scope_completions.chain(manix_completions).collect_vec())
-    }
     fn rename(&mut self, params: RenameParams) -> Option<HashMap<Url, Vec<TextEdit>>> {
         struct Rename<'a> {
             edits: Vec<TextEdit>,

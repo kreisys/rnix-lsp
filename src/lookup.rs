@@ -80,6 +80,49 @@ impl App {
         Some(scope)
     }
 
+    pub fn full_ident_name(&self, node: &SyntaxNode) -> Option<(SyntaxNode, Vec<String>)> {
+        let try_get_ident_name = |x| match ParsedType::try_from(x) {
+            Ok(ParsedType::Ident(ident)) => Some(ident.as_str().to_string()),
+            _ => None,
+        };
+        let node_path_pair: Option<(SyntaxNode, Vec<String>)> = node.ancestors().find_map(|node| {
+            let path = match ParsedType::try_from(node.clone()) {
+                Ok(ParsedType::Key(key)) => {
+                    let path = key
+                        .path()
+                        .filter_map(try_get_ident_name)
+                        .filter(|name| !name.trim().trim_end_matches("\n").is_empty())
+                        .map(|x| x.replace("\n", ""))
+                        .collect::<Vec<_>>();
+                    Some(path)
+                }
+                Ok(ParsedType::Select(key)) => {
+                    let mut path = key
+                        .set()?
+                        .descendants()
+                        .filter_map(try_get_ident_name)
+                        .filter(|name| !name.trim().trim_end_matches("\n").is_empty())
+                        .map(|x| x.replace("\n", ""))
+                        .collect::<Vec<_>>();
+
+                    let index = key
+                        .index()
+                        .and_then(|index| index.descendants().find_map(try_get_ident_name))
+                        .map(|x| x.replace("\n", ""))
+                        .unwrap_or("".to_string());
+                    path.push(index);
+                    Some(path)
+                }
+                _ => None,
+            };
+            path.map(|x| (node, x))
+        });
+
+        dbg!(&node_path_pair);
+
+        Some(node_path_pair?)
+    }
+
     pub fn namespace_for_node(&self, node: &SyntaxNode) -> Vec<String> {
         let mut path = node
             .parent()
