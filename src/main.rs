@@ -305,9 +305,10 @@ impl App {
                 },
             ));
         } else if let Some((id, params)) = cast::<Completion>(&mut req) {
+            // look at params.context for trigger reasons, etc
             let completions = self
                 .completions(&params.text_document_position)
-                .unwrap_or_default();
+                .unwrap_or_else(|| CompletionResponse::Array(Vec::new()));
             self.reply(Response::new_ok(id, completions));
         } else if let Some((id, params)) = cast::<Rename>(&mut req) {
             let changes = self.rename(params);

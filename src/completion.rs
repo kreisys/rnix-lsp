@@ -1,7 +1,8 @@
 use crate::{utils, App};
 use itertools::Itertools;
 use lsp_types::{
-    CompletionItem, CompletionTextEdit, Documentation, TextDocumentPositionParams, TextEdit,
+    CompletionItem, CompletionList, CompletionResponse, CompletionTextEdit, Documentation,
+    TextDocumentPositionParams, TextEdit,
 };
 use manix::{DocEntry, DocSource};
 use rnix::{
@@ -37,10 +38,7 @@ impl App {
         Some(scope_completions)
     }
 
-    fn manix_completions(
-        &self,
-        params: &TextDocumentPositionParams,
-    ) -> Option<Vec<CompletionItem>> {
+    fn manix_completions(&self, params: &TextDocumentPositionParams) -> Option<CompletionResponse> {
         let (ast, content) = self.files.get(&params.text_document.uri)?;
         let offset = utils::lookup_pos(content, params.position)?;
         let root_node = ast.node();
@@ -74,14 +72,17 @@ impl App {
                 }
             })
             .collect_vec();
-        Some(manix_completions)
+        Some(CompletionResponse::List(CompletionList {
+            is_incomplete: true,
+            items: manix_completions,
+        }))
     }
 
     #[allow(clippy::shadow_unrelated)] // false positive
     pub fn completions(
         &mut self,
         params: &TextDocumentPositionParams,
-    ) -> Option<Vec<CompletionItem>> {
+    ) -> Option<CompletionResponse> {
         // let scope_completions = self.scope_completions(params)?;
         let manix_completions = self.manix_completions(params)?;
         Some(manix_completions)
