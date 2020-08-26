@@ -3,7 +3,7 @@ use crate::{
     App,
 };
 use lsp_types::Url;
-use rnix::{types::*, value::Value as ParsedValue, SyntaxNode};
+use rnix::{types::*, value::Value as ParsedValue, NodeOrToken, SyntaxKind, SyntaxNode};
 use std::{
     collections::{hash_map::Entry, HashMap},
     convert::TryFrom,
@@ -81,15 +81,24 @@ impl App {
     }
 
     pub fn full_ident_name(&self, node: &SyntaxNode) -> Option<(SyntaxNode, Vec<String>)> {
-        let try_get_ident_name = |x| match ParsedType::try_from(x) {
+        let try_get_ident_name = |x: SyntaxNode| match ParsedType::try_from(x) {
             Ok(ParsedType::Ident(ident)) => Some(ident.as_str().to_string()),
             _ => None,
         };
+
+
+        
         let node_path_pair: Option<(SyntaxNode, Vec<String>)> = node.ancestors().find_map(|node| {
             let path = match ParsedType::try_from(node.clone()) {
                 Ok(ParsedType::Key(key)) => {
                     let path = key
-                        .path()
+                        .node()
+                        .children_with_tokens()
+                        .take_while(|n| match n {
+                            NodeOrToken::Node(n) => n.kind() == SyntaxKind::NODE_IDENT,
+                            NodeOrToken::Token(t) => t.kind() == SyntaxKind::TOKEN_DOT,
+                        })
+                        .filter_map(|n| n.as_node().cloned())
                         .filter_map(try_get_ident_name)
                         .filter(|name| !name.trim().trim_end_matches("\n").is_empty())
                         .map(|x| x.replace("\n", ""))
@@ -97,20 +106,18 @@ impl App {
                     Some(path)
                 }
                 Ok(ParsedType::Select(key)) => {
-                    let mut path = key
-                        .set()?
-                        .descendants()
+                    let path = key
+                        .node()
+                        .children_with_tokens()
+                        .take_while(|n| match n {
+                            NodeOrToken::Node(n) => n.kind() == SyntaxKind::NODE_IDENT,
+                            NodeOrToken::Token(t) => t.kind() == SyntaxKind::TOKEN_DOT,
+                        })
+                        .filter_map(|n| n.as_node().cloned())
                         .filter_map(try_get_ident_name)
                         .filter(|name| !name.trim().trim_end_matches("\n").is_empty())
                         .map(|x| x.replace("\n", ""))
                         .collect::<Vec<_>>();
-
-                    let index = key
-                        .index()
-                        .and_then(|index| index.descendants().find_map(try_get_ident_name))
-                        .map(|x| x.replace("\n", ""))
-                        .unwrap_or("".to_string());
-                    path.push(index);
                     Some(path)
                 }
                 _ => None,
@@ -119,9 +126,8 @@ impl App {
         });
 
         dbg!(&node_path_pair);
-        let mut node_path_pair = node_path_pair?;
 
-        Some(node_path_pair)
+        Some(node_path_pair?)
     }
 
     pub fn namespace_for_node(&self, node: &SyntaxNode) -> Vec<String> {

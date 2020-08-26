@@ -39,7 +39,10 @@ impl App {
         Some(scope_completions)
     }
 
-    fn manix_completions(&self, params: &TextDocumentPositionParams) -> Option<CompletionResponse> {
+    fn manix_completions(
+        &self,
+        params: &TextDocumentPositionParams,
+    ) -> Option<Vec<CompletionItem>> {
         let (ast, content) = self.files.get(&params.text_document.uri)?;
         let offset = utils::lookup_pos(content, params.position)?;
         let root_node = ast.node();
@@ -47,7 +50,6 @@ impl App {
         let node = utils::closest_node_to(&root_node, offset)?;
         let (full_ident_node, full_ident_name) = self.full_ident_name(&node)?;
         dbg!(node.text_range());
-        dbg!(full_ident_node.text_range());
 
         let node_range = Range {
             start: utils::offset_to_pos(
@@ -61,8 +63,8 @@ impl App {
             end: utils::offset_to_pos(
                 content,
                 full_ident_node
-                    .descendants_with_tokens()
-                    .filter(|n| match n {
+                    .children_with_tokens()
+                    .take_while(|n| match n {
                         rnix::NodeOrToken::Node(n) => n.kind() == SyntaxKind::NODE_IDENT,
                         rnix::NodeOrToken::Token(t) => t.kind() == SyntaxKind::TOKEN_DOT,
                     })
@@ -72,43 +74,40 @@ impl App {
                     .to_usize(),
             ),
         };
+        dbg!(node_range);
+
+        let search_results = self.manix_values.search(&full_ident_name.clone().join("."));
 
         let (namespace, namespace_items) =
-            self.next_namespace_step_completions(full_ident_name.clone());
+            self.next_namespace_step_completions(full_ident_name.clone(), search_results);
 
         let manix_completions = namespace_items
             .iter()
             .unique_by(|x| x.name())
-            .map(|def| {
-                // let text_to_complete = def
-                //     .trim_start_matches(&(namespace.clone() + "."))
-                //     .to_owned();
-                let text_to_complete = def.name().to_owned();
-
-                CompletionItem {
-                    label: text_to_complete.clone(),
-                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                        range: node_range, //  utils::range(content, full_ident_node.text_range()),
-                        new_text: text_to_complete,
-                    })),
-                    documentation: def
-                        .try_as_doc_entry()
-                        .map(|entry| Documentation::String(entry.pretty_printed())),
-                    ..CompletionItem::default()
-                }
+            .map(|def| CompletionItem {
+                label: def.name().clone(),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                    range: node_range,
+                    new_text: def.name().clone(),
+                })),
+                documentation: def
+                    .try_as_doc_entry()
+                    .map(|entry| Documentation::String(entry.pretty_printed())),
+                ..CompletionItem::default()
             })
             .collect_vec();
-        Some(CompletionResponse::List(CompletionList {
-            is_incomplete: true,
-            items: manix_completions,
-        }))
+        // Some(CompletionResponse::List(CompletionList {
+        //     is_incomplete: false,
+        //     items: manix_completions,
+        // }));
+        Some(manix_completions)
     }
 
     #[allow(clippy::shadow_unrelated)] // false positive
     pub fn completions(
         &mut self,
         params: &TextDocumentPositionParams,
-    ) -> Option<CompletionResponse> {
+    ) -> Option<Vec<CompletionItem>> {
         // let scope_completions = self.scope_completions(params)?;
         let manix_completions = self.manix_completions(params)?;
         Some(manix_completions)
@@ -117,19 +116,12 @@ impl App {
     fn next_namespace_step_completions(
         &self,
         current_ns: Vec<String>,
-    ) -> (String, Vec<NamespaceCompletionResult>) {
-        let results = self.manix_values.search(&current_ns.join("."));
-
-        // while let Some((_, tail)) = current_ns.split_first() {
-        //     if !results.is_empty() {
-        //         break;
-        //     }
-        //     current_ns = tail.to_vec();
-        //     results = self.manix_source.search(&current_ns.join("."));
-        // }
+        search_results: Vec<DocEntry>,
+    ) -> (Vec<String>, Vec<NamespaceCompletionResult>) {
+        // TODO handle things like `with pkgs;`
 
         let query_ns_iter = current_ns.iter();
-        let longest_match = results
+        let longest_match = search_results
             .iter()
             .map(|result| {
                 result
@@ -143,7 +135,7 @@ impl App {
             .max();
         if let Some(longest_match) = longest_match {
             dbg!(&current_ns, &longest_match);
-            let completions = results
+            let completions = search_results
                 .into_iter()
                 .filter(|result| {
                     result
@@ -156,23 +148,19 @@ impl App {
                 })
                 .map(|result| {
                     use NamespaceCompletionResult::*;
-                    if result.name().replace("\n", "").split('.').count() - 1 == longest_match.len()
-                    {
+                    if result.name().split('.').count() - 1 == longest_match.len() {
                         FinalNode(result)
                     } else {
-                        Set(result
-                            .name()
-                            .replace("\n", "")
-                            .split('.')
-                            .take(longest_match.len())
-                            .join("."))
+                        let presented_result =
+                            result.name().split('.').take(longest_match.len()).join(".");
+                        Set(presented_result)
                     }
                 })
                 .unique_by(|x| x.name())
                 .collect_vec();
-            (current_ns.join("."), completions)
+            (current_ns, completions)
         } else {
-            (current_ns.join("."), Vec::new())
+            (current_ns, Vec::new())
         }
     }
 }
