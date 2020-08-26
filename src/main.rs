@@ -100,11 +100,12 @@ fn real_main() -> Result<(), Error> {
 
     connection.initialize(capabilities)?;
 
-    let manix_source = load_manix_source().unwrap();
-
+    let (cache_invalid, manix_values) = load_manix_values().unwrap();
+    let manix_options = load_manix_options(cache_invalid).unwrap();
     App {
         files: HashMap::new(),
-        manix_source,
+        manix_options,
+        manix_values,
         conn: connection,
     }
     .main();
@@ -136,19 +137,13 @@ fn build_source_and_add<T>(
     aggregate.add_source(Box::new(source));
 }
 
-fn load_manix_source() -> Option<AggregateDocSource> {
+fn load_manix_values() -> Option<(bool, AggregateDocSource)> {
     let cache_dir = xdg::BaseDirectories::with_prefix("manix").ok()?;
-
     let comment_cache_path = cache_dir.place_cache_file("database.bin").ok()?;
     let nixpkgs_tree_cache_path = cache_dir.place_cache_file("nixpkgs_tree.bin").ok()?;
-    let options_hm_cache_path = cache_dir.place_cache_file("options_hm_database.bin").ok()?;
-    let options_nixos_cache_path = cache_dir
-        .place_cache_file("options_nixos_database.bin")
-        .ok()?;
     let nixpkgs_doc_cache_path = cache_dir
         .place_cache_file("nixpkgs_doc_database.bin")
         .ok()?;
-
     let mut aggregate_source = AggregateDocSource::default();
 
     let mut comment_db = if comment_cache_path.exists() {
@@ -162,22 +157,7 @@ fn load_manix_source() -> Option<AggregateDocSource> {
     let cache_invalid = comment_db.update().ok()?;
     comment_db.save(&comment_cache_path).ok()?;
     aggregate_source.add_source(Box::new(comment_db));
-
     if cache_invalid {
-        build_source_and_add(
-            OptionsDatabase::new(OptionsDatabaseType::HomeManager),
-            "Home Manager Options",
-            &options_hm_cache_path,
-            &mut aggregate_source,
-        );
-
-        build_source_and_add(
-            OptionsDatabase::new(OptionsDatabaseType::NixOS),
-            "NixOS Options",
-            &options_nixos_cache_path,
-            &mut aggregate_source,
-        );
-
         build_source_and_add(
             nixpkgs_tree_docsource::NixpkgsTreeDatabase::new(),
             "Nixpkgs Tree",
@@ -193,14 +173,6 @@ fn load_manix_source() -> Option<AggregateDocSource> {
         );
     } else {
         aggregate_source.add_source(Box::new(
-            OptionsDatabase::load(&fs::read(&options_hm_cache_path).ok()?).ok()?,
-        ));
-
-        aggregate_source.add_source(Box::new(
-            OptionsDatabase::load(&fs::read(&options_nixos_cache_path).ok()?).ok()?,
-        ));
-
-        aggregate_source.add_source(Box::new(
             NixpkgsTreeDatabase::load(&fs::read(&nixpkgs_tree_cache_path).ok()?).ok()?,
         ));
 
@@ -208,12 +180,49 @@ fn load_manix_source() -> Option<AggregateDocSource> {
             XmlFuncDocDatabase::load(&fs::read(&nixpkgs_doc_cache_path).ok()?).ok()?,
         ));
     }
+    Some((cache_invalid, aggregate_source))
+}
+
+fn load_manix_options(reload_cache: bool) -> Option<AggregateDocSource> {
+    let cache_dir = xdg::BaseDirectories::with_prefix("manix").ok()?;
+
+    let options_hm_cache_path = cache_dir.place_cache_file("options_hm_database.bin").ok()?;
+    let options_nixos_cache_path = cache_dir
+        .place_cache_file("options_nixos_database.bin")
+        .ok()?;
+
+    let mut aggregate_source = AggregateDocSource::default();
+
+    if reload_cache {
+        build_source_and_add(
+            OptionsDatabase::new(OptionsDatabaseType::HomeManager),
+            "Home Manager Options",
+            &options_hm_cache_path,
+            &mut aggregate_source,
+        );
+
+        build_source_and_add(
+            OptionsDatabase::new(OptionsDatabaseType::NixOS),
+            "NixOS Options",
+            &options_nixos_cache_path,
+            &mut aggregate_source,
+        );
+    } else {
+        aggregate_source.add_source(Box::new(
+            OptionsDatabase::load(&fs::read(&options_hm_cache_path).ok()?).ok()?,
+        ));
+
+        aggregate_source.add_source(Box::new(
+            OptionsDatabase::load(&fs::read(&options_nixos_cache_path).ok()?).ok()?,
+        ));
+    }
     Some(aggregate_source)
 }
 
 struct App {
     files: HashMap<Url, (AST, String)>,
-    manix_source: manix::AggregateDocSource,
+    manix_options: manix::AggregateDocSource,
+    manix_values: manix::AggregateDocSource,
     conn: Connection,
 }
 impl App {
@@ -390,7 +399,8 @@ impl App {
         let cursor = utils::ident_at(&ast.node(), offset)?;
         let ident = cursor.ident.as_str();
 
-        let definitions = self.manix_source.search(&ident.to_lowercase());
+        let mut definitions = self.manix_values.search(&ident.to_lowercase());
+        definitions.append(&mut self.manix_options.search(&ident.to_lowercase()));
 
         Some(
             definitions

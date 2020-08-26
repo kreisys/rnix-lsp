@@ -119,8 +119,9 @@ impl App {
         });
 
         dbg!(&node_path_pair);
+        let mut node_path_pair = node_path_pair?;
 
-        Some(node_path_pair?)
+        Some(node_path_pair)
     }
 
     pub fn namespace_for_node(&self, node: &SyntaxNode) -> Vec<String> {

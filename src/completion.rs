@@ -1,14 +1,15 @@
 use crate::{utils, App};
 use itertools::Itertools;
 use lsp_types::{
-    CompletionItem, CompletionList, CompletionResponse, CompletionTextEdit, Documentation,
+    CompletionItem, CompletionList, CompletionResponse, CompletionTextEdit, Documentation, Range,
     TextDocumentPositionParams, TextEdit,
 };
 use manix::{DocEntry, DocSource};
 use rnix::{
-    types::{TokenWrapper, TypedNode},
-    NixLanguage, SyntaxNode, TextUnit,
+    types::{ParsedType, TokenWrapper, TypedNode},
+    NixLanguage, SyntaxKind, SyntaxNode, TextUnit,
 };
+use std::convert::TryFrom;
 
 impl App {
     fn scope_completions(
@@ -48,7 +49,32 @@ impl App {
         dbg!(node.text_range());
         dbg!(full_ident_node.text_range());
 
-        let (namespace, namespace_items) = self.next_namespace_step_completions(full_ident_name);
+        let node_range = Range {
+            start: utils::offset_to_pos(
+                content,
+                full_ident_node
+                    .first_token()?
+                    .text_range()
+                    .start()
+                    .to_usize(),
+            ),
+            end: utils::offset_to_pos(
+                content,
+                full_ident_node
+                    .descendants_with_tokens()
+                    .filter(|n| match n {
+                        rnix::NodeOrToken::Node(n) => n.kind() == SyntaxKind::NODE_IDENT,
+                        rnix::NodeOrToken::Token(t) => t.kind() == SyntaxKind::TOKEN_DOT,
+                    })
+                    .last()?
+                    .text_range()
+                    .end()
+                    .to_usize(),
+            ),
+        };
+
+        let (namespace, namespace_items) =
+            self.next_namespace_step_completions(full_ident_name.clone());
 
         let manix_completions = namespace_items
             .iter()
@@ -62,7 +88,7 @@ impl App {
                 CompletionItem {
                     label: text_to_complete.clone(),
                     text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                        range: utils::range(content, full_ident_node.text_range()),
+                        range: node_range, //  utils::range(content, full_ident_node.text_range()),
                         new_text: text_to_complete,
                     })),
                     documentation: def
@@ -92,7 +118,7 @@ impl App {
         &self,
         current_ns: Vec<String>,
     ) -> (String, Vec<NamespaceCompletionResult>) {
-        let results = self.manix_source.search(&current_ns.join("."));
+        let results = self.manix_values.search(&current_ns.join("."));
 
         // while let Some((_, tail)) = current_ns.split_first() {
         //     if !results.is_empty() {
@@ -148,31 +174,6 @@ impl App {
         } else {
             (current_ns.join("."), Vec::new())
         }
-
-        // let first_result_name = if let Some(first_result) = results.first() {
-        //     first_result.name().clone()
-        // } else {
-        //     return (current_ns.join("."), Vec::new());
-        // };
-
-        // let longest_match = first_result_name
-        //     .split(".")
-        //     .enumerate()
-        //     .take_while(|(i, part)| Some(*part) == current_ns.get(*i).map(|x| x.as_str()));
-        // let longest_match_len = longest_match.count();
-
-        // let completions = results
-        //     .iter()
-        //     .map(|res| {
-        //         dbg!(longest_match_len);
-        //         dbg!(res.name().split('.').count());
-        //         // if res.name().split('.').count() == longest_match_len {
-        //         // }
-        //         // res.name().split('.').take(longest_match_len + 1).join(".")
-        //     })
-        //     .dedup()
-        //     .collect_vec();
-        // (current_ns.join("."), completions)
     }
 }
 
