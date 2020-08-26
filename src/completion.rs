@@ -39,10 +39,11 @@ impl App {
         Some(scope_completions)
     }
 
-    fn manix_options_completion(
+    fn manix_options_completions(
         &self,
         params: &TextDocumentPositionParams,
     ) -> Option<Vec<CompletionItem>> {
+        // TODO implement this
         None
     }
 
@@ -104,10 +105,6 @@ impl App {
                 ..CompletionItem::default()
             })
             .collect_vec();
-        // Some(CompletionResponse::List(CompletionList {
-        //     is_incomplete: false,
-        //     items: manix_completions,
-        // }));
         Some(manix_completions)
     }
 
@@ -117,8 +114,14 @@ impl App {
         params: &TextDocumentPositionParams,
     ) -> Option<Vec<CompletionItem>> {
         // let scope_completions = self.scope_completions(params)?;
-        let manix_completions = self.manix_value_completions(params)?;
-        Some(manix_completions)
+        let mut manix_value_completions = self.manix_value_completions(params).unwrap_or_default();
+        let mut manix_options_completions =
+            self.manix_options_completions(params).unwrap_or_default();
+        let mut completions = Vec::new();
+        completions.append(&mut manix_value_completions);
+        completions.append(&mut manix_options_completions);
+
+        Some(completions)
     }
 
     fn next_namespace_step_completions(
