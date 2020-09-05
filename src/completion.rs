@@ -85,7 +85,9 @@ impl App {
             ),
         };
 
-        let search_results = self.manix_values.search(&full_ident_name.clone().join("."));
+        let search_results = self.manix_values.search(&manix::Lowercase(
+            &full_ident_name.clone().join(".").as_bytes(),
+        ));
 
         let (namespace, namespace_items) =
             self.next_namespace_step_completions(full_ident_name.clone(), search_results);
