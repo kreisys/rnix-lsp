@@ -45,10 +45,10 @@ use rnix::{
     parser::*,
     types::*,
     value::{Anchor as RAnchor, Value as RValue},
-    SyntaxNode,
+    SyntaxNode, TextRange, TextSize,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs, panic,
     path::{Path, PathBuf},
     process,
@@ -78,7 +78,7 @@ fn real_main() -> Result<(), Error> {
         text_document_sync: Some(TextDocumentSyncCapability::Options(
             TextDocumentSyncOptions {
                 open_close: Some(true),
-                change: Some(TextDocumentSyncKind::Full),
+                change: Some(TextDocumentSyncKind::Incremental),
                 ..TextDocumentSyncOptions::default()
             },
         )),
@@ -256,11 +256,7 @@ impl App {
                     let id = req.id.clone();
                     match self.conn.handle_shutdown(&req) {
                         Ok(true) => break,
-                        Ok(false) => {
-                            if let Err(err) = self.handle_request(req) {
-                                self.err(id, err);
-                            }
-                        }
+                        Ok(false) => self.handle_request(req),
                         Err(err) => {
                             // This only fails if a shutdown was
                             // requested in the first place, so it
@@ -278,7 +274,7 @@ impl App {
             }
         }
     }
-    fn handle_request(&mut self, req: Request) -> Result<(), Error> {
+    fn handle_request(&mut self, req: Request) {
         fn cast<Kind>(req: &mut Option<Request>) -> Option<(RequestId, Kind::Params)>
         where
             Kind: RequestTrait,
@@ -335,14 +331,10 @@ impl App {
         } else if let Some((id, params)) = cast::<Formatting>(&mut req) {
             let changes = if let Some((ast, code)) = self.files.get(&params.text_document.uri) {
                 let fmt = nixpkgs_fmt::reformat_node(&ast.node());
-                fmt.text_diff()
-                    .iter()
-                    .filter(|range| !range.delete.is_empty() || !range.insert.is_empty())
-                    .map(|edit| TextEdit {
-                        range: utils::range(&code, edit.delete),
-                        new_text: edit.insert.to_string(),
-                    })
-                    .collect()
+                vec![TextEdit {
+                    range: utils::range(&code, TextRange::up_to(ast.node().text().len())),
+                    new_text: fmt.text().to_string(),
+                }]
             } else {
                 Vec::new()
             };
@@ -355,9 +347,18 @@ impl App {
                 }
             }
             self.reply(Response::new_ok(id, selections));
+        } else {
+            let req = req.expect("internal error: req should have been wrapped in Some");
+
+            self.reply(Response::new_err(
+                req.id,
+                ErrorCode::MethodNotFound as i32,
+                format!("Unhandled method {}", req.method),
+            ))
         }
-        Ok(())
     }
+
+    // https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_didChange
     fn handle_notification(&mut self, req: Notification) -> Result<(), Error> {
         match &*req.method {
             DidOpenTextDocument::METHOD => {
@@ -368,13 +369,57 @@ impl App {
                 self.files.insert(params.text_document.uri, (parsed, text));
             }
             DidChangeTextDocument::METHOD => {
+                // Per the language server spec (https://git.io/JcrvY), we should apply changes
+                // in order, the same as we would if we received them in separate notifications.
+                // That means that, given TextDocumentContentChangeEvents A and B and original
+                // document S, change A refers to S -> S' and B refers to S' -> S''. So we don't
+                // need to remember original document indicies when applying multiple changes.
                 let params: DidChangeTextDocumentParams = serde_json::from_value(req.params)?;
-                if let Some(change) = params.content_changes.into_iter().last() {
-                    let parsed = rnix::parse(&change.text);
-                    self.send_diagnostics(params.text_document.uri.clone(), &change.text, &parsed)?;
-                    self.files
-                        .insert(params.text_document.uri, (parsed, change.text));
+                let uri = params.text_document.uri;
+                let mut content = self
+                    .files
+                    .get(&uri)
+                    .map(|f| f.1.clone())
+                    .unwrap_or("".to_string());
+                for change in params.content_changes.into_iter() {
+                    let range = match change.range {
+                        Some(x) => x,
+                        None => {
+                            content = change.text;
+                            continue;
+                        }
+                    };
+
+                    let mut newline_iter = content.match_indices('\n');
+
+                    let start_idx = if range.start.line == 0 {
+                        0
+                    } else {
+                        newline_iter.nth(range.start.line as usize - 1).unwrap().0 + 1
+                    } + range.start.character as usize;
+
+                    let num_changed_lines = range.end.line - range.start.line;
+                    let end_idx = if num_changed_lines == 0 {
+                        start_idx + (range.end.character - range.start.character) as usize
+                    } else {
+                        // Note that .nth() is relative, not absolute
+                        newline_iter.nth(num_changed_lines as usize - 1).unwrap().0 + 1
+                            + range.end.character as usize
+                    };
+
+                    // Language server ranges are based on UTF-16 (https://git.io/JcrUi)
+                    let content_utf16 = content.encode_utf16().collect::<Vec<_>>();
+                    let mut new_content = String::from_utf16_lossy(&content_utf16[..start_idx]);
+                    new_content.push_str(&change.text);
+                    let suffix = String::from_utf16_lossy(&content_utf16[end_idx..]);
+                    new_content.push_str(&suffix);
+
+                    content = new_content;
                 }
+                let parsed = rnix::parse(&content);
+                self.send_diagnostics(uri.clone(), &content, &parsed)?;
+                self.files
+                    .insert(uri, (parsed, content.to_owned().to_string()));
             }
             _ => (),
         }
@@ -384,14 +429,18 @@ impl App {
         let (current_ast, current_content) = self.files.get(&params.text_document.uri)?;
         let offset = utils::lookup_pos(current_content, params.position)?;
         let node = current_ast.node();
-        let (name, scope) = self.scope_for_ident(params.text_document.uri, &node, offset)?;
+        let (name, scope, _) = self.scope_for_ident(params.text_document.uri, &node, offset)?;
 
-        let var = scope.get(name.as_str())?;
-        let (_definition_ast, definition_content) = self.files.get(&var.file)?;
-        Some(Location {
-            uri: (*var.file).clone(),
-            range: utils::range(definition_content, var.key.text_range()),
-        })
+        let var_e = scope.get(name.as_str())?;
+        if let Some(var) = &var_e.var {
+            let (_definition_ast, definition_content) = self.files.get(&var.file)?;
+            Some(Location {
+                uri: (*var.file).clone(),
+                range: utils::range(definition_content, var.key.text_range()),
+            })
+        } else {
+            None
+        }
     }
 
     fn documentation(&mut self, params: &TextDocumentPositionParams) -> Option<String> {
@@ -473,7 +522,8 @@ impl App {
         let parent_dir = Path::new(params.text_document.uri.path()).parent();
         let home_dir = home_dir();
         let home_dir = home_dir.as_ref();
-        let mut document_links = vec![];
+
+        let mut links = VecDeque::new();
         for node in current_ast.node().descendants() {
             let value = Value::cast(node.clone()).and_then(|v| v.to_value().ok());
             if let Some(RValue::Path(anchor, path)) = value {
@@ -483,9 +533,16 @@ impl App {
                     RAnchor::Home => home_dir.map(|home| home.join(path)),
                     RAnchor::Store => None,
                 }
-                .and_then(|path| std::fs::canonicalize(&path).ok())
+                .map(|path| {
+                    if path.is_dir() {
+                        path.join("default.nix")
+                    } else {
+                        path
+                    }
+                })
                 .filter(|path| path.is_file())
                 .and_then(|s| Url::parse(&format!("file://{}", s.to_string_lossy())).ok());
+
                 if let Some(file_url) = file_url {
                     document_links.push(DocumentLink {
                         target: Some(file_url),
@@ -495,16 +552,28 @@ impl App {
                     })
                 }
             }
+            cur_line_start = cur_line_end + 1;
         }
-        Some(document_links)
+
+        Some(lsp_links)
     }
     fn send_diagnostics(&mut self, uri: Url, code: &str, ast: &AST) -> Result<(), Error> {
         let errors = ast.errors();
         let mut diagnostics = Vec::with_capacity(errors.len());
         for err in errors {
-            if let ParseError::Unexpected(node) = err {
+            let node_range = match err {
+                ParseError::Unexpected(range)
+                | ParseError::UnexpectedDoubleBind(range)
+                | ParseError::UnexpectedExtra(range)
+                | ParseError::UnexpectedWanted(_, range, _) => Some(range),
+                ParseError::UnexpectedEOF | ParseError::UnexpectedEOFWanted(_) => {
+                    Some(TextRange::at(TextSize::of(code), TextSize::from(0)))
+                }
+                _ => None,
+            };
+            if let Some(node_range) = node_range {
                 diagnostics.push(Diagnostic {
-                    range: utils::range(code, node),
+                    range: utils::range(code, node_range),
                     severity: Some(DiagnosticSeverity::Error),
                     message: err.to_string(),
                     ..Diagnostic::default()

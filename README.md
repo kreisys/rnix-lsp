@@ -82,3 +82,35 @@ endif
                   :major-modes '(nix-mode)
                   :server-id 'nix))
 ```
+#### [eglot](https://github.com/joaotavora/eglot)
+```elisp
+(add-to-list 'eglot-server-programs '(nix-mode . ("rnix-lsp")))
+```
+
+### Kakoune
+
+#### [kak-lsp](https://github.com/kak-lsp/kak-lsp)
+
+```toml
+[language.nix]
+filetypes = ["nix"]
+command = "rnix-lsp"
+```
+
+
+### VSCode
+
+#### [vscode-nix-ide](https://github.com/nix-community/vscode-nix-ide/)
+
+```json
+{
+    "nix.enableLanguageServer": true
+}
+```
+
+# RIP jd91mzm2
+
+Sadly, the original author of this project, [@jD91mZM2 has passed
+away](https://www.redox-os.org/news/open-source-mental-health/). His online
+presence was anonymous and what we have left is his code. This is but one of
+his many repos that he contributed to.
