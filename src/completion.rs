@@ -7,7 +7,7 @@ use lsp_types::{
 use manix::{DocEntry, DocSource};
 use rnix::{
     types::{ParsedType, TokenWrapper, TypedNode},
-    NixLanguage, SyntaxKind, SyntaxNode, TextUnit,
+    NixLanguage, SyntaxKind, SyntaxNode, TextSize,
 };
 use std::convert::TryFrom;
 
@@ -20,7 +20,7 @@ impl App {
         let offset = utils::lookup_pos(content, params.position)?;
         let root_node = ast.node();
 
-        let (name, scope) =
+        let (name, scope, _) =
             self.scope_for_ident(params.text_document.uri.clone(), &root_node, offset)?;
         let (_, content) = self.files.get(&params.text_document.uri)?;
 
@@ -66,7 +66,7 @@ impl App {
                     .first_token()?
                     .text_range()
                     .start()
-                    .to_usize(),
+                    .into(),
             ),
             end: utils::offset_to_pos(
                 content,
@@ -81,7 +81,7 @@ impl App {
                     .last()?
                     .text_range()
                     .end()
-                    .to_usize(),
+                    .into(),
             ),
         };
 

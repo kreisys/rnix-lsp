@@ -99,6 +99,14 @@ impl CursorInfo {
     }
 }
 
+pub fn closest_node_to(root: &SyntaxNode, offset: usize) -> Option<SyntaxNode> {
+    match root.token_at_offset(TextSize::try_from(offset).expect("aaah big number scary")) {
+        TokenAtOffset::None => None,
+        TokenAtOffset::Single(node) => Some(node.parent()),
+        TokenAtOffset::Between(left, _) => Some(left.parent()),
+    }
+}
+
 pub fn ident_at(root: &SyntaxNode, offset: usize) -> Option<CursorInfo> {
     let mut add = false;
     let ident =

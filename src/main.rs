@@ -544,12 +544,47 @@ impl App {
                 .and_then(|s| Url::parse(&format!("file://{}", s.to_string_lossy())).ok());
 
                 if let Some(file_url) = file_url {
-                    document_links.push(DocumentLink {
-                        target: Some(file_url),
-                        range: utils::range(current_content, node.text_range()),
-                        tooltip: None,
-                        data: None,
-                    })
+                    links.push_back((node.text_range(), file_url))
+                }
+            }
+        }
+
+        let mut lsp_links = vec![];
+
+        let mut cur_line_start = 0;
+        let mut next_link_pos = usize::from(links.front()?.0.start());
+        'pos_search: for (line_num, (cur_line_end, _)) in
+            current_content.match_indices('\n').enumerate()
+        {
+            while next_link_pos >= cur_line_start && next_link_pos < cur_line_end {
+                // We already checked if the list is empty
+                let (range, url) = links.pop_front().unwrap();
+
+                // Nix doesn't have multi-line links
+                let start_pos = Position {
+                    line: line_num as u64,
+                    character: (next_link_pos - cur_line_start) as u64,
+                };
+                let end_pos = Position {
+                    line: line_num as u64,
+                    character: (usize::from(range.end()) - cur_line_start) as u64,
+                };
+                let lsp_range = Range {
+                    start: start_pos,
+                    end: end_pos,
+                };
+
+                lsp_links.push(DocumentLink {
+                    target: Some(url),
+                    range: lsp_range,
+                    tooltip: None,
+                    data: None,
+                });
+
+                if let Some((range, _)) = links.front() {
+                    next_link_pos = usize::from(range.start());
+                } else {
+                    break 'pos_search;
                 }
             }
             cur_line_start = cur_line_end + 1;
