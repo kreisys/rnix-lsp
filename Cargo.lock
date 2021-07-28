@@ -423,9 +423,8 @@ dependencies = [
 
 [[package]]
 name = "manix"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e1c48f1b9d644999daf0ecae4097d67e79b775bf7c025f48c8cd2e810e9f5d1"
+version = "0.6.3"
+source = "git+https://github.com/kreisys/manix?branch=master#28385eb1c11dea077ac2d46289b3c7abf24ffa54"
 dependencies = [
  "anyhow",
  "bincode",
