@@ -186,6 +186,7 @@ fn load_manix_values() -> Option<(bool, AggregateDocSource)> {
 fn load_manix_options(reload_cache: bool) -> Option<AggregateDocSource> {
     let cache_dir = xdg::BaseDirectories::with_prefix("manix").ok()?;
 
+    let options_nd_cache_path = cache_dir.place_cache_file("options_nd_database.bin").ok()?;
     let options_hm_cache_path = cache_dir.place_cache_file("options_hm_database.bin").ok()?;
     let options_nixos_cache_path = cache_dir
         .place_cache_file("options_nixos_database.bin")
@@ -194,6 +195,13 @@ fn load_manix_options(reload_cache: bool) -> Option<AggregateDocSource> {
     let mut aggregate_source = AggregateDocSource::default();
 
     if reload_cache {
+        build_source_and_add(
+            OptionsDatabase::new(options_docsource::OptionsDatabaseType::NixDarwin),
+            "Home Manager Options",
+            &options_hm_cache_path,
+            &mut aggregate_source,
+        );
+
         build_source_and_add(
             OptionsDatabase::new(options_docsource::OptionsDatabaseType::HomeManager),
             "Home Manager Options",
@@ -208,6 +216,10 @@ fn load_manix_options(reload_cache: bool) -> Option<AggregateDocSource> {
             &mut aggregate_source,
         );
     } else {
+        aggregate_source.add_source(Box::new(
+            OptionsDatabase::load(&fs::read(&options_nd_cache_path).ok()?).ok()?,
+        ));
+
         aggregate_source.add_source(Box::new(
             OptionsDatabase::load(&fs::read(&options_hm_cache_path).ok()?).ok()?,
         ));
