@@ -25,6 +25,7 @@
             rustc
             cargo
             gitAndTools.pre-commit
+            libiconv
           ];
         };
 
