@@ -426,7 +426,7 @@ dependencies = [
 [[package]]
 name = "manix"
 version = "0.6.3"
-source = "git+https://github.com/kreisys/manix?branch=master#6ad46c1f16a47dc32dd43a2f3d20529e7d7f3373"
+source = "git+https://github.com/kreisys/manix?branch=master#5a69f920f1501f3f7e71a275ab8dbfd4a9f85fb3"
 dependencies = [
  "anyhow",
  "bincode",
